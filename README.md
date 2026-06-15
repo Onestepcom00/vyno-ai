@@ -4,7 +4,7 @@
 
 <br/>
 
-# Vyno
+# Vyno AI - Motion Design Generator Tools
 
 **An AI agent that turns text descriptions into rendered motion design videos.**
 
@@ -15,7 +15,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
 [![Status](https://img.shields.io/badge/status-in%20development-orange?style=flat-square)]()
 
-> *Write what you want to animate. Vyno generates the video.*
+
 
 </div>
 
@@ -154,7 +154,7 @@ Start MySQL (via XAMPP or any MySQL server), then create the database:
 CREATE DATABASE vyno CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ```
 
-The schema is auto-applied on first backend start — no manual migration needed.
+or you can use backend/src/db/vyno.sql
 
 ### 5. Configure the backend
 
