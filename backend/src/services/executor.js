@@ -1,12 +1,24 @@
 import { spawn } from 'child_process';
 import { promises as fs } from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
+// __dirname equivalent for ESM
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const PROJECTS_BASE = path.resolve(process.env.PROJECTS_BASE_PATH || './projects');
 const FFMPEG_PATH = path.resolve(process.env.FFMPEG_PATH || 'ffmpeg');
+
+// Base audio assets: resolve from this file's location (src/services/) → up 4 levels → tools/assets
+// executor.js is at: vyno/backend/src/services/executor.js
+// tools/assets is at: VYNO-COPIE/tools/assets
+const BASE_ASSETS_DIR = process.env.BASE_ASSETS_PATH
+  ? path.resolve(process.env.BASE_ASSETS_PATH)
+  : path.join(__dirname, '..', '..', '..', '..', 'tools', 'assets');
 
 /**
  * Runs a shell command in a given directory and returns stdout/stderr
@@ -149,6 +161,36 @@ export async function executeTask(action, params, projectPath) {
           output: `Video rendered: ${output}`,
           renderPath: outputPath,
         };
+      }
+
+      case 'copy_base_assets': {
+        // Copy tools/assets (sound-effects, beats-musics) into project/assets/
+        const destBase = path.join(projectPath, 'assets');
+        await fs.mkdir(destBase, { recursive: true });
+
+        const sourceExists = await fs.access(BASE_ASSETS_DIR).then(() => true).catch(() => false);
+        if (!sourceExists) {
+          return { success: false, output: '', error: `Base assets dir not found: ${BASE_ASSETS_DIR}` };
+        }
+
+        let copied = 0;
+        const copyDir = async (src, dest) => {
+          await fs.mkdir(dest, { recursive: true });
+          const entries = await fs.readdir(src, { withFileTypes: true });
+          for (const entry of entries) {
+            const srcPath = path.join(src, entry.name);
+            const destPath = path.join(dest, entry.name);
+            if (entry.isDirectory()) {
+              await copyDir(srcPath, destPath);
+            } else {
+              await fs.copyFile(srcPath, destPath);
+              copied++;
+            }
+          }
+        };
+
+        await copyDir(BASE_ASSETS_DIR, destBase);
+        return { success: true, output: `Copied ${copied} base audio asset(s) to ${destBase}` };
       }
 
       case 'lint': {

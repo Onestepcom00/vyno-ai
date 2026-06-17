@@ -1,8 +1,82 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
-const CF_API_URL = `https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/${process.env.CF_AI_MODEL}`;
+const CF_BASE = `https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run`;
+const CF_API_URL = `${CF_BASE}/${process.env.CF_AI_MODEL}`;
 const CF_TOKEN = process.env.CF_AI_TOKEN;
+
+// Llama model used for prompt rewriting (fast, cheap)
+const LLAMA_MODEL = process.env.CF_LLAMA_MODEL || '@cf/meta/llama-3.1-8b-instruct';
+
+const REWRITE_SYSTEM = `You are a professional motion design creative director and prompt engineer.
+Your task: transform the user's raw idea into a detailed, production-ready motion design brief.
+
+OUTPUT FORMAT — return ONLY a JSON object, no commentary:
+{
+  "rewritten_prompt": "<the full enriched prompt in the same language as the user's input>",
+  "was_enriched": true|false
+}
+
+RULES:
+- If the user's prompt already has sufficient detail (>60 words with style/color/animation specifics), set was_enriched=false and only lightly polish it.
+- If the prompt is vague/short (<60 words), set was_enriched=true and expand it with ALL of:
+  • Background color and texture (e.g. "deep black #050510 with subtle grain")
+  • Typography style (font, weight, size hierarchy)
+  • Color palette (primary, accent, neutral — with hex codes)
+  • Animation style (e.g. "kinetic typography", "reveal wipe", "glitch", "float in")
+  • Number of scenes and their purpose (intro/content/cta)
+  • Specific text to display in each scene
+  • Mood/tone (cinematic, playful, corporate, minimal, etc.)
+  • Sound design hint (energetic beat, calm ambient, etc.)
+- Keep the same language as the input (French stays French, English stays English).
+- Do NOT invent brand names or facts not present in the original.
+- Output ONLY valid JSON. No markdown, no explanation.`;
+
+/**
+ * Rewrites a raw user prompt into a detailed motion design brief using Llama.
+ * Returns the enriched prompt string (falls back to original on error).
+ * @param {string} userPrompt
+ * @returns {Promise<{prompt: string, wasEnriched: boolean}>}
+ */
+export async function rewritePrompt(userPrompt) {
+  try {
+    const llamaUrl = `${CF_BASE}/${LLAMA_MODEL}`;
+    const payload = {
+      messages: [
+        { role: 'system', content: REWRITE_SYSTEM },
+        { role: 'user', content: userPrompt },
+      ],
+      max_tokens: 2048,
+    };
+
+    const response = await fetch(llamaUrl, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${CF_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) return { prompt: userPrompt, wasEnriched: false };
+
+    const data = await response.json();
+    if (!data.success) return { prompt: userPrompt, wasEnriched: false };
+
+    const raw = data.result?.response || '';
+    // Strip possible <think> tags from Llama output
+    const clean = raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+
+    // Extract JSON
+    const jsonStr = clean.match(/\{[\s\S]*\}/)?.[0];
+    if (!jsonStr) return { prompt: userPrompt, wasEnriched: false };
+
+    const parsed = JSON.parse(jsonStr);
+    const enriched = parsed.rewritten_prompt?.trim();
+    if (!enriched) return { prompt: userPrompt, wasEnriched: false };
+
+    return { prompt: enriched, wasEnriched: parsed.was_enriched === true };
+  } catch {
+    return { prompt: userPrompt, wasEnriched: false };
+  }
+}
 
 // Max messages kept in history sent to LLM (to preserve precision)
 const MAX_HISTORY = 6;

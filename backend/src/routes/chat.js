@@ -4,12 +4,16 @@ import multer from 'multer';
 import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
+import { fileURLToPath } from 'url';
 import { requireAuth } from '../middleware/auth.js';
 import db from '../db/connection.js';
-import { callLLM } from '../services/llm.js';
+import { callLLM, rewritePrompt } from '../services/llm.js';
 import { PLAN_PROMPT, SCENE_PROMPT } from '../services/systemPrompt.js';
 import { executeTask, getProjectPath } from '../services/executor.js';
 import { describeImageForMotionDesign } from '../services/vision.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const upload = multer({ dest: os.tmpdir(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -188,10 +192,27 @@ router.post('/:projectId/message', requireAuth, upload.array('assets', 4), async
       visualIdentity = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : null;
     } catch { visualIdentity = null; }
 
+    // ── READ AVAILABLE BEATS/MUSIC TRACKS ──
+    // chat.js is at vyno/backend/src/routes/ — go up 4 levels to reach VYNO-COPIE/tools/assets
+    const baseAssetsDir = process.env.BASE_ASSETS_PATH
+      ? path.resolve(process.env.BASE_ASSETS_PATH)
+      : path.resolve(__dirname, '..', '..', '..', '..', 'tools', 'assets');
+    const beatsDir = path.join(baseAssetsDir, 'beats-musics');
+    const sfxDir = path.join(baseAssetsDir, 'sound-effects');
+    const beatsList = await fs.readdir(beatsDir).catch(() => []);
+    const sfxList = await fs.readdir(sfxDir).catch(() => []);
+
     // ── BUILD RICH CONTEXT FOR LLM ──
     const contextParts = [
       `Project: "${project.name}" | Status: ${project.status}`,
     ];
+
+    if (beatsList.length > 0) {
+      contextParts.push(`Available beats-musics tracks (use one as main background music):\n${beatsList.map(f => `- assets/beats-musics/${f}`).join('\n')}`);
+    }
+    if (sfxList.length > 0) {
+      contextParts.push(`Available sound-effects (all listed in AUDIO ASSETS section):\n${sfxList.map(f => `- assets/sound-effects/${f}`).join('\n')}`)
+    }
 
     if (visualIdentity) {
       contextParts.push(`Current visual_identity: ${JSON.stringify(visualIdentity)}\nIMPORTANT: If user asks to change colors/style/concept, generate a COMPLETELY different visual_identity.`);
@@ -220,9 +241,21 @@ router.post('/:projectId/message', requireAuth, upload.array('assets', 4), async
 
     const projectContext = contextParts.join('\n\n');
 
+    // ── PROMPT REWRITE: use Llama to enrich vague prompts before sending to DeepSeek ──
+    let finalUserContent = userContent;
+    const isCreation = project.status === 'initializing' || !storyboard;
+    if (isCreation) {
+      send('task_comment', { comment: '✨ Optimisation du prompt en cours...' });
+      const rewrite = await rewritePrompt(userContent);
+      finalUserContent = rewrite.prompt;
+      if (rewrite.wasEnriched) {
+        send('prompt_enriched', { original: userContent, enriched: finalUserContent });
+      }
+    }
+
     // ── PHASE 1: PLAN — call LLM with PLAN_PROMPT to get storyboard only (no HTML) ──
     const planSystemMsg = { role: 'system', content: PLAN_PROMPT + '\n\n=== PROJECT CONTEXT ===\n' + projectContext };
-    const userMsg = { role: 'user', content: userContent };
+    const userMsg = { role: 'user', content: finalUserContent };
     const historyForLLM = historyRows.map((m) => ({ role: m.role, content: m.content }));
 
     const planResult = await callLLM([planSystemMsg, userMsg], historyForLLM);
@@ -281,7 +314,10 @@ router.post('/:projectId/message', requireAuth, upload.array('assets', 4), async
       ];
 
       const taskRecordsRaw = [
-        ...(parsed.action === 'create_motion' ? [{ action: 'create_project', label: 'Init project', params: {} }] : []),
+        ...(parsed.action === 'create_motion' ? [
+          { action: 'create_project', label: 'Init project', params: {} },
+          { action: 'copy_base_assets', label: 'Copy audio assets', params: {} },
+        ] : []),
         ...filesToGenerate.map((f) => ({ action: 'write_file', label: f.label, params: { path: f.path }, _meta: f })),
         { action: 'render', label: 'Render video', params: { output: 'output.mp4' } },
       ];
@@ -290,12 +326,13 @@ router.post('/:projectId/message', requireAuth, upload.array('assets', 4), async
 
       // Update project metadata if creation
       if (parsed.action === 'create_motion') {
-        const rawSlug = (parsed.project_name || project.slug)
-          .toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').slice(0, 40);
+        const suffix = projectId.substring(0, 8);
+        const rawSlug = `${(parsed.project_name || project.slug)
+          .toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').slice(0, 32)}-${suffix}`;
         // Reuse existing project_path if already set; otherwise create new one
         const folderName = project.project_path && project.project_path !== project.slug
           ? project.project_path
-          : `${rawSlug}-${projectId.substring(0, 8)}`;
+          : rawSlug;
         const title = parsed.title || project.name;
         const description = parsed.description || null;
         const concept = parsed.concept || null;
@@ -421,8 +458,16 @@ router.post('/:projectId/message', requireAuth, upload.array('assets', 4), async
             sceneContextParts.push('FILE TO GENERATE: index.html (root orchestrator)');
             sceneContextParts.push(`Scenes:\n${storyboardPlan.map((sc, i) => {
               const start = storyboardPlan.slice(0, i).reduce((s, x) => s + x.duration, 0);
-              return `  scene ${sc.scene}: compId="${sc.compId}" file="${sc.file}" data-start=${start} data-duration=${sc.duration}`;
+              return `  scene ${sc.scene}: compId="${sc.compId}" file="${sc.file}" data-start=${start} data-duration=${sc.duration} | ${sc.description || ''}`;
             }).join('\n')}`);
+            // Audio context for index.html
+            if (beatsList.length > 0) {
+              sceneContextParts.push(`Available music tracks: ${beatsList.map(f => `assets/beats-musics/${f}`).join(', ')}\nPick ONE as main background music.`);
+            } else {
+              sceneContextParts.push('No beats-musics tracks available — use SFX only, no main music track.');
+            }
+            sceneContextParts.push(`Available SFX: ${sfxList.map(f => `assets/sound-effects/${f}`).join(', ')}`);
+            sceneContextParts.push(`AUDIO TASK: Add <audio> elements in index.html for: 1) main music (full duration, vol 0.4), 2) SFX timed to scene moments (typing, glitch, notification as appropriate). All audio data-track-index must be 5+.`);
           } else {
             sceneContextParts.push(`FILE TO GENERATE: ${meta.path}`);
             sceneContextParts.push(`compId: ${meta.compId}`);

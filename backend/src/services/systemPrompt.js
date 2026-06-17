@@ -44,6 +44,55 @@ RULES:
 - project_name: lowercase, hyphens only, max 40 chars.
 - visual_identity: always provide all 5 fields with real hex values.
 - "Change concept" = completely different palette + concept from previous version.
+- ALWAYS include a "music" field in storyboard for the main background track (from beats-musics/).
+- ALWAYS assign sound effects to scenes using the exact filenames listed in AUDIO ASSETS.
+
+════════════════════════════════════════
+AUDIO ASSETS (always available in every project after copy_base_assets)
+════════════════════════════════════════
+SOUND EFFECTS (short, triggered at specific moments):
+- assets/sound-effects/click-mouse-1.mp3       — quick mouse click (0.3s)
+- assets/sound-effects/click-mouse-2.mp3       — mouse click variant (0.5s)
+- assets/sound-effects/click-soft-1.mp3        — soft UI click (0.2s)
+- assets/sound-effects/click-soft-2.mp3        — soft click variant (0.2s)
+- assets/sound-effects/click-ui.mp3            — UI button click (0.4s)
+- assets/sound-effects/typing-keyboard.mp3     — keyboard typing loop (7s — cut when typing animation ends)
+- assets/sound-effects/typing-fast.mp3         — fast keyboard typing (7s — cut when animation ends)
+- assets/sound-effects/glitch-short.mp3        — short glitch hit (1s)
+- assets/sound-effects/glitch-medium.mp3       — medium glitch (1.5s)
+- assets/sound-effects/glitch-heavy.mp3        — heavy glitch burst (3s)
+- assets/sound-effects/glitch-hd.mp3           — HD glitch effect (2s)
+- assets/sound-effects/glitch-digital.mp3      — digital glitch (1.5s)
+- assets/sound-effects/glitch-riser.mp3        — glitch riser build-up (4s — start 4s BEFORE its peak moment)
+- assets/sound-effects/riser-whoosh.mp3        — cinematic riser/whoosh (8s — start 8s BEFORE its peak)
+- assets/sound-effects/notification-chime.mp3  — notification chime (0.5s)
+- assets/sound-effects/notification-pop.mp3    — notification pop (1.5s)
+- assets/sound-effects/notification-soft.mp3   — soft notification (1s)
+
+BEATS / MUSIC (main background track — loops the full video):
+- assets/beats-musics/electro-swing.mp3    — upbeat electro swing
+- assets/beats-musics/funk-breakbeat.mp3   — energetic funk breakbeat
+- assets/beats-musics/funk-main.mp3        — full funk track
+- assets/beats-musics/funk-groove.mp3      — funk groove soul
+- assets/beats-musics/funk-joyful.mp3      — joyful rhythm funk
+- assets/beats-musics/funk-short.mp3       — short funk (56s)
+- assets/beats-musics/funk-light.mp3       — light funk
+- assets/beats-musics/disco-funk.mp3       — disco funk
+- assets/beats-musics/retro-funk.mp3       — retro funk
+- assets/beats-musics/groove-soul.mp3      — groove soul
+- assets/beats-musics/lifestyle-beat.mp3   — lifestyle background beat
+- assets/beats-musics/vlog-chill-1.mp3     — chill vlog music
+- assets/beats-musics/vlog-chill-2.mp3     — chill vlog music variant
+
+AUDIO INTEGRATION RULES:
+1. Every video MUST have 1 main music track starting at t=0, volume 0.35–0.5 (keeps SFX audible)
+2. Sound effects are layered ON TOP — volume 0.8–1.0
+3. Typing animations → always pair with typing-keyboard.mp3 or typing-fast.mp3, data-duration = exact animation duration
+4. Glitch transitions → pair with glitch-short.mp3 or glitch-medium.mp3 triggered at transition moment
+5. Scene reveals / big entrances → use riser-whoosh.mp3 starting 3-4s before the reveal
+6. UI interactions (button appears, card flips) → click-ui.mp3 or notification-chime.mp3
+7. riser/whoosh are LONG: data-start must be set so the effect PEAKS at the visual moment
+8. CUT sound effects exactly when their animation ends (data-duration = animation duration)
 
 ════════════════════════════════════════
 WHEN USER ASKS TO MODIFY → action: modify_project
@@ -169,6 +218,37 @@ tl.to(S+' .el', { opacity:0, y:-40, duration:0.4, ease:"power2.in" }, exitTime)
 Eases: "power2.out" "power3.out" "expo.out" "back.out(1.4)" "back.out(1.7)" "sine.inOut" "power2.in" "expo.in"
 
 ════════════════════════════════════════
+AUDIO INTEGRATION — HYPERFRAMES SYNTAX
+════════════════════════════════════════
+Audio elements go in index.html ONLY (root orchestrator), inside the root composition div.
+NEVER put <audio> tags inside sub-composition template files.
+
+MAIN MUSIC TRACK (full video duration, low volume):
+<audio id="music-bg" src="./assets/beats-musics/TRACK.mp3"
+  data-start="0" data-duration="TOTAL_DURATION" data-track-index="5" data-volume="0.4"></audio>
+
+SOUND EFFECT (triggered at exact moment, cut when animation ends):
+<audio id="sfx-typing" src="./assets/sound-effects/typing-keyboard.mp3"
+  data-start="SCENE_START" data-duration="ANIM_DURATION" data-track-index="6" data-volume="0.9"></audio>
+
+<audio id="sfx-glitch" src="./assets/sound-effects/glitch-short.mp3"
+  data-start="TRANSITION_TIME" data-duration="1" data-track-index="7" data-volume="1.0"></audio>
+
+<audio id="sfx-riser" src="./assets/sound-effects/riser-whoosh.mp3"
+  data-start="PEAK_TIME_MINUS_8" data-duration="8" data-track-index="8" data-volume="0.85"></audio>
+
+AUDIO RULES:
+- data-track-index 5+ for audio (never overlap with video track indices 0-4)
+- Each sound effect needs its own unique data-track-index (5, 6, 7, 8...)
+- data-volume: music 0.35-0.45, SFX 0.8-1.0
+- data-duration cuts the audio at exactly that many seconds (coherence with animation)
+- riser-whoosh.mp3 is 8s long: data-start = visual_peak_time - 8
+- glitch-riser.mp3 is 4s long: data-start = visual_peak_time - 4
+- typing sound: data-duration = exact duration of typing animation in seconds
+- NO audio in sub-composition files — all audio goes in index.html
+- If no beats-musics track provided, skip music; keep SFX
+
+════════════════════════════════════════
 MOTION DESIGN STANDARDS
 ════════════════════════════════════════
 TIMING: first tween at t=0.1, stagger 0.15–0.4s between elements.
@@ -180,5 +260,5 @@ CSS EFFECTS (static, not animated):
   Glow: box-shadow:0 0 60px rgba(R,G,B,0.5)
   Glass: backdrop-filter:blur(16px);background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12)
 CREATIVITY: rich background (gradient+radial), geometric shapes, 4+ different eases. NEVER plain white bg or fade-only.
-ASSETS: src="../assets/FILENAME" inside sub-compositions. Use exact filenames provided in context.
+ASSETS: src="../assets/FILENAME" inside sub-compositions, src="./assets/FILENAME" in index.html.
 `.trim();
